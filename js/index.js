@@ -7,11 +7,8 @@ const screens = {
 const deviceName = document.getElementById('device-name');
 const deviceNameInput = document.getElementById('device-name-input');
 const connectButton = document.getElementById('button-connect');
-const echoButton = document.getElementById('button-echo');
-const disconnectButton = document.getElementById('button-disconnect');
 const resetButton = document.getElementById('button-reset');
 const imageStateButton = document.getElementById('button-image-state');
-const eraseButton = document.getElementById('button-erase');
 const testButton = document.getElementById('button-test');
 const confirmButton = document.getElementById('button-confirm');
 const imageList = document.getElementById('image-list');
@@ -31,23 +28,217 @@ const uploadIcon = document.getElementById('upload-icon');
 const uploadDropTitle = document.getElementById('upload-drop-title');
 const uploadDropSubtitle = document.getElementById('upload-drop-subtitle');
 
-if (navigator && navigator.bluetooth && navigator.bluetooth.getAvailability()) {
-    bluetoothIsAvailableMessage.innerText = 'Bluetooth is available in your browser.';
-    bluetoothIsAvailable.className = 'alert alert-success';
-    connectBlock.style.display = 'block';
+const DEFAULT_DEVICE_PREFIX = 'Fieldy';
+const rawSearch = window.location.search;
+const urlParams = new URLSearchParams(rawSearch);
+let firmwareUrlParam = urlParams.get('firmwareUrl') || urlParams.get('firmware');
+
+if (!firmwareUrlParam) {
+    try {
+        const decodedSearch = decodeURIComponent(rawSearch.startsWith('?') ? rawSearch.slice(1) : rawSearch);
+        const fallbackParams = new URLSearchParams(decodedSearch);
+        firmwareUrlParam = fallbackParams.get('firmwareUrl') || fallbackParams.get('firmware');
+    } catch (error) {
+        console.warn('Failed to decode search params for firmware URL.', error);
+    }
+}
+const firmwareUrl = firmwareUrlParam ? firmwareUrlParam.trim() : null;
+const remoteFirmwareMode = Boolean(firmwareUrl);
+let remoteFirmwareName = null;
+
+if (remoteFirmwareMode) {
+    try {
+        const parsedUrl = new URL(firmwareUrl);
+        const pathSegments = decodeURIComponent(parsedUrl.pathname).split('/');
+        remoteFirmwareName = pathSegments.pop() || 'firmware.bin';
+    } catch (error) {
+        console.warn('Failed to parse firmware URL, using fallback name.', error);
+        remoteFirmwareName = 'firmware.bin';
+    }
+}
+
+if (remoteFirmwareMode) {
+    uploadDropZone.classList.add('remote-mode');
+    uploadDropZone.style.cursor = 'default';
+    uploadDropSubtitle.innerText = 'Firmware will be downloaded automatically once a device connects.';
+    uploadDropTitle.innerText = remoteFirmwareName ? `Remote firmware: ${remoteFirmwareName}` : 'Remote firmware';
+    fileCancel.style.display = 'none';
+    setUploadButtonLabel('Upload Firmware');
+    fileUpload.disabled = true;
+    fileStatus.innerText = 'Waiting for device connection to download firmware...';
+}
+
+const updateBluetoothAvailabilityUI = (available) => {
+    if (available) {
+        bluetoothIsAvailableMessage.innerText = 'Bluetooth is available in your browser.';
+        bluetoothIsAvailable.className = 'alert alert-success';
+        connectBlock.style.display = 'block';
+    } else {
+        bluetoothIsAvailable.className = 'alert alert-danger';
+        bluetoothIsAvailableMessage.innerText = 'Bluetooth is not available in your browser.';
+        connectBlock.style.display = 'none';
+    }
+};
+
+if (navigator && navigator.bluetooth) {
+    // If remote mode is active we still want to evaluate availability immediately
+    updateBluetoothAvailabilityUI(true);
+
+    if (typeof navigator.bluetooth.getAvailability === 'function') {
+        navigator.bluetooth.getAvailability().then((available) => {
+            updateBluetoothAvailabilityUI(available);
+        }).catch(() => {
+            updateBluetoothAvailabilityUI(false);
+        });
+
+        navigator.bluetooth.addEventListener?.('availabilitychanged', (event) => {
+            updateBluetoothAvailabilityUI(event.value);
+        });
+    } else {
+        updateBluetoothAvailabilityUI(true);
+    }
 } else {
-    bluetoothIsAvailable.className = 'alert alert-danger';
-    bluetoothIsAvailableMessage.innerText = 'Bluetooth is not available in your browser.';
+    updateBluetoothAvailabilityUI(false);
 }
 
 let file = null;
 let fileData = null;
 let images = [];
+let remoteFirmwareData = null;
+let remoteFirmwareInfo = null;
+let remoteFetchPromise = null;
+let pendingFirmwareHash = null;
+let autoTestHash = null;
 
-deviceNameInput.value = localStorage.getItem('deviceName');
-deviceNameInput.addEventListener('change', () => {
-    localStorage.setItem('deviceName', deviceNameInput.value);
-});
+const escapeHtml = (value) => {
+    return String(value ?? '').replace(/[&<>"']/g, (char) => {
+        if (char === '&') return '&amp;';
+        if (char === '<') return '&lt;';
+        if (char === '>') return '&gt;';
+        if (char === '"') return '&quot;';
+        return '&#39;';
+    });
+};
+
+const storedDeviceName = localStorage.getItem('deviceName');
+if (deviceNameInput) {
+    if (storedDeviceName) {
+        deviceNameInput.value = storedDeviceName;
+    }
+    deviceNameInput.addEventListener('change', () => {
+        localStorage.setItem('deviceName', deviceNameInput.value);
+    });
+}
+
+const buildImageInfoHTML = (info) => {
+    let infoHTML = '<div class="upload-info-grid">';
+
+    infoHTML += `<div class="detail-row">`;
+    infoHTML += `<span class="detail-label">Version</span>`;
+    infoHTML += `<span class="detail-value">v${info.version}</span>`;
+    infoHTML += `</div>`;
+
+    infoHTML += `<div class="detail-row">`;
+    infoHTML += `<span class="detail-label">Hash</span>`;
+    infoHTML += `<div class="hash-container">`;
+    infoHTML += `<span class="detail-value hash-value" title="${info.hash}">${info.hash.substring(0, 8)}...</span>`;
+    infoHTML += `<i class="bi-clipboard upload-hash-copy-icon" data-hash="${info.hash}" title="Copy full hash"></i>`;
+    infoHTML += `</div>`;
+    infoHTML += `</div>`;
+
+    infoHTML += '</div>';
+
+    return infoHTML;
+};
+
+const attachUploadHashCopyHandler = () => {
+    document.querySelector('.upload-hash-copy-icon')?.addEventListener('click', async function() {
+        const hash = this.getAttribute('data-hash');
+        try {
+            await navigator.clipboard.writeText(hash);
+            this.classList.remove('bi-clipboard');
+            this.classList.add('bi-clipboard-check', 'copied');
+            setTimeout(() => {
+                this.classList.remove('bi-clipboard-check', 'copied');
+                this.classList.add('bi-clipboard');
+            }, 2000);
+        } catch (err) {
+            console.error('Failed to copy:', err);
+        }
+    });
+};
+
+function setUploadButtonLabel(label) {
+    if (!fileUpload) return;
+    fileUpload.innerHTML = `
+        <span class="badge rounded-pill bg-light text-primary me-2">1</span>
+        <i class="bi-upload me-2"></i>${label}
+    `;
+}
+
+setUploadButtonLabel('Upload Firmware');
+
+const prepareRemoteFirmware = async () => {
+    if (!remoteFirmwareMode) {
+        return;
+    }
+
+    const safeName = escapeHtml(remoteFirmwareName || 'Firmware');
+
+    if (remoteFirmwareData) {
+        file = { name: remoteFirmwareName };
+        fileData = remoteFirmwareData;
+        fileStatus.innerHTML = `<div class="file-ready-status"><i class="bi-check-circle-fill me-2"></i>${safeName} - Ready to upload</div>`;
+        fileInfo.innerHTML = buildImageInfoHTML(remoteFirmwareInfo);
+        attachUploadHashCopyHandler();
+        fileUpload.disabled = false;
+        setUploadButtonLabel('Upload Firmware');
+        return;
+    }
+
+    if (!remoteFetchPromise) {
+        fileStatus.innerHTML = `<div class="file-selected-status"><i class="bi-cloud-arrow-down me-2"></i>Downloading remote firmware...</div>`;
+        fileInfo.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"><span class="visually-hidden">Loading...</span></div> Fetching firmware...';
+        fileUpload.disabled = true;
+
+        remoteFetchPromise = (async () => {
+            try {
+                const response = await fetch(firmwareUrl, { cache: 'no-store' });
+                if (!response.ok) {
+                    throw new Error(`Download failed with status ${response.status}`);
+                }
+
+                const arrayBuffer = await response.arrayBuffer();
+                remoteFirmwareData = arrayBuffer;
+                remoteFirmwareInfo = await mcumgr.imageInfo(arrayBuffer);
+                file = { name: remoteFirmwareName };
+                fileData = arrayBuffer;
+                fileStatus.innerHTML = `<div class="file-ready-status"><i class="bi-check-circle-fill me-2"></i>${safeName} - Ready to upload</div>`;
+                fileInfo.innerHTML = buildImageInfoHTML(remoteFirmwareInfo);
+                attachUploadHashCopyHandler();
+                fileUpload.disabled = false;
+                setUploadButtonLabel('Upload Firmware');
+                pendingFirmwareHash = remoteFirmwareInfo.hash;
+            } catch (error) {
+                remoteFirmwareData = null;
+                remoteFirmwareInfo = null;
+                fileData = null;
+                fileStatus.innerHTML = `<div class="file-error-status"><i class="bi-x-circle-fill me-2"></i>${safeName} download failed</div>`;
+                fileInfo.innerHTML = `<span class="text-danger">ERROR: ${error.message}</span>`;
+                fileUpload.disabled = false;
+                setUploadButtonLabel('Retry Firmware Download');
+            } finally {
+                remoteFetchPromise = null;
+            }
+        })();
+    }
+
+    try {
+        await remoteFetchPromise;
+    } catch (error) {
+        // Error already surfaced in UI.
+    }
+};
 
 // Close connection error alert
 closeConnectionError.addEventListener('click', () => {
@@ -55,6 +246,11 @@ closeConnectionError.addEventListener('click', () => {
 });
 
 const mcumgr = new MCUManager();
+
+if (remoteFirmwareMode) {
+    prepareRemoteFirmware();
+}
+
 mcumgr.onConnecting(() => {
     console.log('Connecting...');
     connectionError.style.display = 'none'; // Hide any previous errors
@@ -70,17 +266,32 @@ mcumgr.onConnect(() => {
     screens.connected.style.display = 'block';
     imageList.innerHTML = '';
 
-    // Reset upload form state (device may have been reset/updated)
-    uploadIcon.style.display = '';
-    uploadDropTitle.style.display = '';
-    uploadDropSubtitle.style.display = '';
-    fileStatus.innerText = 'No file selected';
-    fileInfo.innerHTML = '';
-    fileImage.value = '';
-    file = null;
-    fileData = null;
-    fileUpload.disabled = true;
-    fileCancel.style.display = 'none';
+    if (remoteFirmwareMode) {
+        uploadIcon.style.display = 'none';
+        uploadDropTitle.style.display = '';
+        uploadDropSubtitle.style.display = '';
+        fileImage.value = '';
+        file = null;
+        fileData = null;
+        fileUpload.disabled = true;
+        fileCancel.style.display = 'none';
+        prepareRemoteFirmware();
+    } else {
+        uploadIcon.style.display = '';
+        uploadDropTitle.style.display = '';
+        uploadDropSubtitle.style.display = '';
+        fileStatus.innerText = 'No file selected';
+        fileInfo.innerHTML = '';
+        fileImage.value = '';
+        file = null;
+        fileData = null;
+        fileUpload.disabled = true;
+        fileCancel.style.display = 'none';
+    }
+
+    testButton.disabled = true;
+    resetButton.disabled = true;
+    confirmButton.disabled = true;
 
     mcumgr.cmdImageState();
 });
@@ -140,6 +351,10 @@ mcumgr.onMessage(({ op, group, id, data, length }) => {
                         return '<i class="bi-dash-circle text-secondary"></i>';
                     };
 
+                    let autoCommandIssued = false;
+                    let canTest = false;
+                    let canReset = false;
+                    let slotZeroConfirmed = true;
                     images?.forEach((image, index) => {
                         console.log(`[DEBUG] Processing image ${index}:`, image);
 
@@ -173,10 +388,10 @@ mcumgr.onMessage(({ op, group, id, data, length }) => {
                         imagesHTML += `<span class="detail-value">${getBooleanIcon(image.confirmed)}</span>`;
                         imagesHTML += `</div>`;
 
-                        imagesHTML += `<div class="detail-row">`;
-                        imagesHTML += `<span class="detail-label">Pending</span>`;
-                        imagesHTML += `<span class="detail-value">${getBooleanIcon(image.pending)}</span>`;
-                        imagesHTML += `</div>`;
+                    imagesHTML += `<div class="detail-row">`;
+                    imagesHTML += `<span class="detail-label">Pending</span>`;
+                    imagesHTML += `<span class="detail-value">${getBooleanIcon(image.pending)}</span>`;
+                    imagesHTML += `</div>`;
 
                         imagesHTML += `<div class="detail-row">`;
                         imagesHTML += `<span class="detail-label">Hash</span>`;
@@ -188,6 +403,42 @@ mcumgr.onMessage(({ op, group, id, data, length }) => {
 
                         imagesHTML += `</div>`;
                         imagesHTML += '</div>';
+
+                        if (!autoCommandIssued && autoTestHash && hashStr === autoTestHash) {
+                            autoCommandIssued = true;
+                            autoTestHash = null;
+                            try {
+                                const hashBytes = new Uint8Array(image.hash);
+                                testButton.disabled = true;
+                                resetButton.disabled = true;
+                                console.log('[AUTO] Initiating image test for uploaded firmware');
+                                mcumgr.cmdImageTest(hashBytes).then(async () => {
+                                    try {
+                                        console.log('[AUTO] Firmware test command sent, refreshing state');
+                                        await mcumgr.cmdImageState();
+                                    } catch (stateError) {
+                                        console.error('[AUTO] Failed to refresh state after test:', stateError);
+                                    }
+                                }).catch(error => {
+                                    console.error('[AUTO] Failed to send test command:', error);
+                                });
+                            } catch (err) {
+                                console.error('[AUTO] Unable to initiate test automatically:', err);
+                            }
+                        }
+
+                        if (image.slot === 1) {
+                            if (image.pending === false) {
+                                canTest = true;
+                            }
+                            if (image.pending === true) {
+                                canReset = true;
+                            }
+                        }
+
+                        if (image.slot === 0) {
+                            slotZeroConfirmed = image.confirmed === true;
+                        }
                     });
                     imageList.innerHTML = imagesHTML;
 
@@ -210,9 +461,11 @@ mcumgr.onMessage(({ op, group, id, data, length }) => {
                     });
 
                     console.log('[DEBUG] Setting button states...');
-                    testButton.disabled = !(data.images && data.images.length > 1 && data.images[1] && data.images[1].pending === false);
+                    testButton.disabled = !slotZeroConfirmed || !canTest;
+                    resetButton.disabled = !canReset;
                     confirmButton.disabled = !(data.images && data.images.length > 0 && data.images[0] && data.images[0].confirmed === false);
-                    console.log('[DEBUG] Button states set - test:', testButton.disabled, 'confirm:', confirmButton.disabled);
+                    console.log('[DEBUG] Button states set - test:', testButton.disabled, 'reset:', resetButton.disabled, 'confirm:', confirmButton.disabled);
+
                     break;
             }
             break;
@@ -257,21 +510,36 @@ mcumgr.onImageUploadProgress(({ percentage, timeoutAdjusted, newTimeout }) => {
 });
 
 mcumgr.onImageUploadFinished(() => {
-    // Show drop zone text again
-    uploadIcon.style.display = '';
-    uploadDropTitle.style.display = '';
-    uploadDropSubtitle.style.display = '';
-
-    fileStatus.innerText = 'No file selected';
-    fileInfo.innerHTML = '<span class="text-success">✓ Upload complete!</span>';
-    fileImage.value = '';
-    file = null;
-    fileData = null;
-    fileUpload.disabled = true;
-    fileCancel.style.display = 'none';
-    setTimeout(() => {
-        fileInfo.innerHTML = '';
-    }, 3000);
+    if (remoteFirmwareMode) {
+        uploadIcon.style.display = 'none';
+        uploadDropTitle.style.display = '';
+        uploadDropSubtitle.style.display = '';
+        fileStatus.innerHTML = '<span class="text-success">✓ Upload complete!</span>';
+        if (remoteFirmwareInfo && remoteFirmwareData) {
+            fileInfo.innerHTML = buildImageInfoHTML(remoteFirmwareInfo);
+            attachUploadHashCopyHandler();
+        }
+        fileUpload.disabled = false;
+        fileCancel.style.display = 'none';
+    } else {
+        uploadIcon.style.display = '';
+        uploadDropTitle.style.display = '';
+        uploadDropSubtitle.style.display = '';
+        fileStatus.innerText = 'No file selected';
+        fileInfo.innerHTML = '<span class="text-success">✓ Upload complete!</span>';
+        fileImage.value = '';
+        file = null;
+        fileData = null;
+        fileUpload.disabled = true;
+        fileCancel.style.display = 'none';
+        setTimeout(() => {
+            fileInfo.innerHTML = '';
+        }, 3000);
+    }
+    if (pendingFirmwareHash) {
+        autoTestHash = pendingFirmwareHash;
+        pendingFirmwareHash = null;
+    }
     mcumgr.cmdImageState();
 });
 
@@ -282,10 +550,15 @@ mcumgr.onImageUploadCancelled(() => {
 });
 
 mcumgr.onImageUploadError(({ error, errorCode, consecutiveTimeouts, totalTimeouts }) => {
-    // Show drop zone text again
-    uploadIcon.style.display = '';
-    uploadDropTitle.style.display = '';
-    uploadDropSubtitle.style.display = '';
+    if (remoteFirmwareMode) {
+        uploadIcon.style.display = 'none';
+        uploadDropTitle.style.display = '';
+        uploadDropSubtitle.style.display = '';
+    } else {
+        uploadIcon.style.display = '';
+        uploadDropTitle.style.display = '';
+        uploadDropSubtitle.style.display = '';
+    }
 
     let tips = `
         <div class="upload-error-tips">
@@ -305,10 +578,9 @@ mcumgr.onImageUploadError(({ error, errorCode, consecutiveTimeouts, totalTimeout
             <div class="upload-error-tips">
                 <strong>What you can try:</strong>
                 <ul>
-                    <li>Click "Erase Slot" to clear the secondary slot</li>
-                    <li>If an image is pending, click "Test Slot #1 on Reboot" or reset the device</li>
-                    <li>If an image is being tested, click "Make Slot #0 Permanent" to confirm it</li>
-                    <li>Check the Images section above for the current slot states</li>
+                    <li>If Slot #1 already shows as pending, click button 2 (Reset Device) to reboot before retrying the upload</li>
+                    <li>If the running image is still in test mode, click button 3 (Make Slot #0 Permanent) to finalize it</li>
+                    <li>Review the Images section to ensure only one firmware image is pending at a time</li>
                 </ul>
             </div>
         `;
@@ -322,151 +594,99 @@ mcumgr.onImageUploadError(({ error, errorCode, consecutiveTimeouts, totalTimeout
     fileUpload.disabled = false;
 });
 
-fileImage.addEventListener('change', () => {
-    file = fileImage.files[0];
-    if (!file) return;
+if (!remoteFirmwareMode) {
+    fileImage.addEventListener('change', () => {
+        file = fileImage.files[0];
+        if (!file) return;
 
-    // Hide drop zone text when file is selected
-    uploadIcon.style.display = 'none';
-    uploadDropTitle.style.display = 'none';
-    uploadDropSubtitle.style.display = 'none';
+        uploadIcon.style.display = 'none';
+        uploadDropTitle.style.display = 'none';
+        uploadDropSubtitle.style.display = 'none';
 
-    // Show cancel button
-    fileCancel.style.display = '';
+        fileCancel.style.display = '';
 
-    fileData = null;
-    fileStatus.innerHTML = `<div class="file-selected-status"><i class="bi-file-earmark-binary me-2"></i>${file.name}</div>`;
-    fileInfo.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"><span class="visually-hidden">Loading...</span></div> Analyzing...';
+        fileData = null;
+        fileStatus.innerHTML = `<div class="file-selected-status"><i class="bi-file-earmark-binary me-2"></i>${file.name}</div>`;
+        fileInfo.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"><span class="visually-hidden">Loading...</span></div> Analyzing...';
 
-    const reader = new FileReader();
-    reader.onload = async () => {
-        fileData = reader.result;
-        try {
-            const info = await mcumgr.imageInfo(fileData);
-            let infoHTML = '<div class="upload-info-grid">';
+        const reader = new FileReader();
+        reader.onload = async () => {
+            fileData = reader.result;
+            try {
+                const info = await mcumgr.imageInfo(fileData);
+                fileStatus.innerHTML = `<div class="file-ready-status"><i class="bi-check-circle-fill me-2"></i>${file.name} - Ready to upload</div>`;
+                fileInfo.innerHTML = buildImageInfoHTML(info);
+                attachUploadHashCopyHandler();
+                fileUpload.disabled = false;
+                pendingFirmwareHash = info.hash;
+            } catch (e) {
+                fileStatus.innerHTML = `<div class="file-error-status"><i class="bi-x-circle-fill me-2"></i>${file.name} - Invalid file</div>`;
+                fileInfo.innerHTML = `<span class="text-danger">ERROR: ${e.message}</span>`;
+                fileUpload.disabled = true;
+            }
+        };
+        reader.readAsArrayBuffer(file);
+    });
 
-            infoHTML += `<div class="detail-row">`;
-            infoHTML += `<span class="detail-label">Version</span>`;
-            infoHTML += `<span class="detail-value">v${info.version}</span>`;
-            infoHTML += `</div>`;
+    fileCancel.addEventListener('click', event => {
+        event.stopPropagation();
+        mcumgr.cancelUpload();
+        uploadIcon.style.display = '';
+        uploadDropTitle.style.display = '';
+        uploadDropSubtitle.style.display = '';
+        fileStatus.innerText = 'No file selected';
+        fileInfo.innerHTML = '';
+        fileImage.value = '';
+        file = null;
+        fileData = null;
+        fileUpload.disabled = true;
+        fileCancel.style.display = 'none';
+    });
 
-            infoHTML += `<div class="detail-row">`;
-            infoHTML += `<span class="detail-label">Hash</span>`;
-            infoHTML += `<div class="hash-container">`;
-            infoHTML += `<span class="detail-value hash-value" title="${info.hash}">${info.hash.substring(0, 8)}...</span>`;
-            infoHTML += `<i class="bi-clipboard upload-hash-copy-icon" data-hash="${info.hash}" title="Copy full hash"></i>`;
-            infoHTML += `</div>`;
-            infoHTML += `</div>`;
+    uploadDropZone.addEventListener('click', () => {
+        fileImage.click();
+    });
 
-            infoHTML += `<div class="detail-row">`;
-            infoHTML += `<span class="detail-label">File Size</span>`;
-            infoHTML += `<span class="detail-value">${fileData.byteLength.toLocaleString()} bytes</span>`;
-            infoHTML += `</div>`;
+    uploadDropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        uploadDropZone.classList.add('drag-over');
+    });
 
-            infoHTML += `<div class="detail-row">`;
-            infoHTML += `<span class="detail-label">Image Size</span>`;
-            infoHTML += `<span class="detail-value">${info.imageSize.toLocaleString()} bytes</span>`;
-            infoHTML += `</div>`;
+    uploadDropZone.addEventListener('dragleave', () => {
+        uploadDropZone.classList.remove('drag-over');
+    });
 
-            infoHTML += '</div>';
+    uploadDropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        uploadDropZone.classList.remove('drag-over');
 
-            fileStatus.innerHTML = `<div class="file-ready-status"><i class="bi-check-circle-fill me-2"></i>${file.name} - Ready to upload</div>`;
-            fileInfo.innerHTML = infoHTML;
-
-            // Add click handler for upload hash copy icon
-            document.querySelector('.upload-hash-copy-icon')?.addEventListener('click', async function() {
-                const hash = this.getAttribute('data-hash');
-                try {
-                    await navigator.clipboard.writeText(hash);
-                    this.classList.remove('bi-clipboard');
-                    this.classList.add('bi-clipboard-check', 'copied');
-                    setTimeout(() => {
-                        this.classList.remove('bi-clipboard-check', 'copied');
-                        this.classList.add('bi-clipboard');
-                    }, 2000);
-                } catch (err) {
-                    console.error('Failed to copy:', err);
-                }
-            });
-
-            fileUpload.disabled = false;
-        } catch (e) {
-            fileStatus.innerHTML = `<div class="file-error-status"><i class="bi-x-circle-fill me-2"></i>${file.name} - Invalid file</div>`;
-            fileInfo.innerHTML = `<span class="text-danger">ERROR: ${e.message}</span>`;
-            fileUpload.disabled = true;
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            fileImage.files = files;
+            const event = new Event('change', { bubbles: true });
+            fileImage.dispatchEvent(event);
         }
-    };
-    reader.readAsArrayBuffer(file);
-});
-fileUpload.addEventListener('click', event => {
-    fileUpload.disabled = true;
+    });
+}
+
+fileUpload.addEventListener('click', async event => {
     event.stopPropagation();
-    if (file && fileData) {
-        mcumgr.cmdUpload(fileData);
+    if (remoteFirmwareMode && !fileData) {
+        await prepareRemoteFirmware();
     }
-});
-
-fileCancel.addEventListener('click', event => {
-    event.stopPropagation();
-
-    // Cancel upload if in progress
-    mcumgr.cancelUpload();
-
-    // Reset the file upload form
-    uploadIcon.style.display = '';
-    uploadDropTitle.style.display = '';
-    uploadDropSubtitle.style.display = '';
-    fileStatus.innerText = 'No file selected';
-    fileInfo.innerHTML = '';
-    fileImage.value = '';
-    file = null;
-    fileData = null;
+    if (!fileData) {
+        return;
+    }
     fileUpload.disabled = true;
-    fileCancel.style.display = 'none';
-});
-
-// Drag and drop functionality
-uploadDropZone.addEventListener('click', () => {
-    fileImage.click();
-});
-
-uploadDropZone.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    uploadDropZone.classList.add('drag-over');
-});
-
-uploadDropZone.addEventListener('dragleave', () => {
-    uploadDropZone.classList.remove('drag-over');
-});
-
-uploadDropZone.addEventListener('drop', (e) => {
-    e.preventDefault();
-    uploadDropZone.classList.remove('drag-over');
-
-    const files = e.dataTransfer.files;
-    if (files.length > 0) {
-        fileImage.files = files;
-        // Trigger the change event
-        const event = new Event('change', { bubbles: true });
-        fileImage.dispatchEvent(event);
-    }
+    mcumgr.cmdUpload(fileData);
 });
 
 connectButton.addEventListener('click', async () => {
-    let filters = null;
-    if (deviceNameInput.value) {
-        filters = [{ namePrefix: deviceNameInput.value }];
-    };
-    await mcumgr.connect(filters);
-});
-
-disconnectButton.addEventListener('click', async () => {
-    mcumgr.disconnect();
-});
-
-echoButton.addEventListener('click', async () => {
-    const message = prompt('Enter a text message to send', 'Hello World!');
-    await mcumgr.smpEcho(message);
+    let prefix = DEFAULT_DEVICE_PREFIX;
+    if (deviceNameInput && deviceNameInput.value.trim()) {
+        prefix = deviceNameInput.value.trim();
+    }
+    await mcumgr.connect([{ namePrefix: prefix }]);
 });
 
 resetButton.addEventListener('click', async () => {
@@ -477,13 +697,20 @@ imageStateButton.addEventListener('click', async () => {
     await mcumgr.cmdImageState();
 });
 
-eraseButton.addEventListener('click', async () => {
-    await mcumgr.cmdImageErase();
-});
-
 testButton.addEventListener('click', async () => {
-    if (images.length > 1 && images[1].pending === false) {
-        await mcumgr.cmdImageTest(images[1].hash);
+    if (!images || images.length === 0) return;
+    const slotOne = images.find(image => image.slot === 1 && image.hash);
+    if (!slotOne) return;
+    const hashBytes = new Uint8Array(slotOne.hash);
+    autoTestHash = null;
+    pendingFirmwareHash = null;
+    testButton.disabled = true;
+    resetButton.disabled = true;
+    try {
+        await mcumgr.cmdImageTest(hashBytes);
+        await mcumgr.cmdImageState();
+    } catch (error) {
+        console.error('Manual test failed:', error);
     }
 });
 

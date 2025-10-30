@@ -669,3 +669,31 @@ table tr:hover td {
 .form-label {
     margin-bottom: 0.25rem;
 }
+
+.step-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-weight: 500;
+    border-radius: 999px;
+    padding-left: 1.1rem;
+    padding-right: 1.1rem;
+}
+
+.step-button .badge {
+    font-size: 0.75rem;
+    letter-spacing: 0.02em;
+}
+
+.step-upload {
+    box-shadow: 0 0.6rem 1.4rem rgba(13, 110, 253, 0.18);
+    transition: box-shadow 0.2s ease;
+}
+
+.step-upload:not(:disabled):hover {
+    box-shadow: 0 0.8rem 1.8rem rgba(13, 110, 253, 0.28);
+}
+
+.step-upload:disabled {
+    box-shadow: none;
+}
