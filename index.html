@@ -61,9 +61,11 @@
                         </div>
 
                         <div id="connect-block" style="display: none;">
-                            <p class="text-muted mb-3">
-                                Click below to connect to your Fieldy device.
-                            </p>
+                            <div class="mb-3">
+                                <label for="device-name-input" class="form-label">Device Name Filter (Optional)</label>
+                                <div class="form-text mb-2">Only show devices whose name starts with this prefix</div>
+                                <input id="device-name-input" type="text" class="form-control form-control-lg" placeholder="e.g., 'Quantum' to filter devices starting with Quantum">
+                            </div>
                             <div class="d-grid">
                                 <button id="button-connect" type="submit" class="btn btn-primary btn-lg">
                                     <i class="bi-bluetooth me-2"></i> Connect to Device
@@ -106,6 +108,26 @@
 
     <!-- Connected Screen -->
     <div class="content" id="connected-screen" style="display: none;">
+        <!-- Device Controls Card -->
+        <div class="card shadow-sm mb-4">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0"><i class="bi-tools me-2"></i>Device Controls</h5>
+            </div>
+            <div class="card-body">
+                <div class="d-flex gap-2 flex-wrap">
+                    <button id="button-echo" type="submit" class="btn btn-outline-primary">
+                        <i class="bi-soundwave me-2"></i>Echo
+                    </button>
+                    <button id="button-reset" type="submit" class="btn btn-outline-info">
+                        <i class="bi-arrow-clockwise me-2"></i>Reset
+                    </button>
+                    <button id="button-disconnect" type="submit" class="btn btn-outline-secondary ms-auto">
+                        <i class="bi-x-square me-2"></i>Disconnect
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <!-- Images Card -->
         <div class="card shadow-sm mb-4">
             <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
@@ -116,21 +138,14 @@
             </div>
             <div class="card-body">
                 <div id="image-list" class="mb-3"></div>
-                <div class="d-flex gap-2 flex-wrap mb-3">
-                    <button class="btn btn-primary step-button step-upload" id="file-upload" disabled>
-                        <span class="badge rounded-pill bg-light text-primary me-2">1</span>
-                        <i class="bi-upload me-2"></i>Upload Firmware
+                <div class="d-flex gap-2 flex-wrap">
+                    <button id="button-erase" type="submit" class="btn btn-warning">
+                        <i class="bi-eraser-fill me-2"></i>Erase Slot
                     </button>
-                    <button id="button-test" type="submit" class="btn btn-outline-primary step-button" disabled>
-                        <span class="badge rounded-pill bg-light text-primary me-2">2</span>
+                    <button id="button-test" type="submit" class="btn btn-primary" disabled>
                         <i class="bi-play-circle me-2"></i>Test Slot #1 on Reboot
                     </button>
-                    <button id="button-reset" type="submit" class="btn btn-outline-info step-button" disabled>
-                        <span class="badge rounded-pill bg-light text-info me-2">3</span>
-                        <i class="bi-arrow-clockwise me-2"></i>Reset Device
-                    </button>
-                    <button id="button-confirm" type="submit" class="btn btn-outline-success step-button" disabled>
-                        <span class="badge rounded-pill bg-light text-success me-2">4</span>
+                    <button id="button-confirm" type="submit" class="btn btn-success" disabled>
                         <i class="bi-check-circle me-2"></i>Make Slot #0 Permanent
                     </button>
                 </div>
@@ -156,6 +171,9 @@
                     </div>
                 </div>
                 <div class="d-flex gap-2 mt-2">
+                    <button class="btn btn-primary btn-lg" id="file-upload" disabled>
+                        <i class="bi-upload me-2"></i>Upload Firmware
+                    </button>
                     <button class="btn btn-outline-secondary btn-lg" id="file-cancel" style="display: none;">
                         <i class="bi-x-lg me-2"></i>Cancel
                     </button>

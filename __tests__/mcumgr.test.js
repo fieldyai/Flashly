@@ -114,6 +114,19 @@ describe('MCUManager', () => {
   });
 
   describe('Image Validation', () => {
+    test('should reject image that is too short', async () => {
+      const shortImage = new Uint8Array(20).buffer;
+      await expect(manager.imageInfo(shortImage)).rejects.toThrow('Invalid image (too short file)');
+    });
+
+    test('should reject image with wrong magic bytes', async () => {
+      const invalidImage = new Uint8Array(32);
+      invalidImage[0] = 0x00; // Wrong magic bytes
+      invalidImage[1] = 0x00;
+      invalidImage[2] = 0x00;
+      invalidImage[3] = 0x00;
+      await expect(manager.imageInfo(invalidImage.buffer)).rejects.toThrow('Invalid image (wrong magic bytes)');
+    });
 
     test('should reject image with wrong load address', async () => {
       const invalidImage = new Uint8Array(32);
@@ -128,6 +141,53 @@ describe('MCUManager', () => {
       invalidImage[6] = 0x00;
       invalidImage[7] = 0x00;
       await expect(manager.imageInfo(invalidImage.buffer)).rejects.toThrow('Invalid image (wrong load address)');
+    });
+
+    test('should reject image with wrong protected TLV area size', async () => {
+      const invalidImage = new Uint8Array(32);
+      // Correct magic bytes
+      invalidImage[0] = 0x3d;
+      invalidImage[1] = 0xb8;
+      invalidImage[2] = 0xf3;
+      invalidImage[3] = 0x96;
+      // Correct load address
+      invalidImage[4] = 0x00;
+      invalidImage[5] = 0x00;
+      invalidImage[6] = 0x00;
+      invalidImage[7] = 0x00;
+      // Header size
+      invalidImage[8] = 0x20; // 32 bytes
+      invalidImage[9] = 0x00;
+      // Wrong protected TLV area size (should be 0)
+      invalidImage[10] = 0x01;
+      invalidImage[11] = 0x00;
+      await expect(manager.imageInfo(invalidImage.buffer)).rejects.toThrow('Invalid image (wrong protected TLV area size)');
+    });
+
+    test('should reject image with incorrect image size', async () => {
+      const invalidImage = new Uint8Array(100);
+      // Correct magic bytes
+      invalidImage[0] = 0x3d;
+      invalidImage[1] = 0xb8;
+      invalidImage[2] = 0xf3;
+      invalidImage[3] = 0x96;
+      // Correct load address
+      invalidImage[4] = 0x00;
+      invalidImage[5] = 0x00;
+      invalidImage[6] = 0x00;
+      invalidImage[7] = 0x00;
+      // Header size
+      invalidImage[8] = 0x20; // 32 bytes
+      invalidImage[9] = 0x00;
+      // Protected TLV area size
+      invalidImage[10] = 0x00;
+      invalidImage[11] = 0x00;
+      // Image size (larger than actual buffer)
+      invalidImage[12] = 0x00;
+      invalidImage[13] = 0x10; // 4096 bytes (too large)
+      invalidImage[14] = 0x00;
+      invalidImage[15] = 0x00;
+      await expect(manager.imageInfo(invalidImage.buffer)).rejects.toThrow('Invalid image (wrong image size)');
     });
 
     test('should reject image with wrong flags', async () => {
@@ -159,6 +219,47 @@ describe('MCUManager', () => {
       invalidImage[18] = 0x00;
       invalidImage[19] = 0x00;
       await expect(manager.imageInfo(invalidImage.buffer)).rejects.toThrow('Invalid image (wrong flags)');
+    });
+
+    test('should parse valid image info correctly', async () => {
+      const validImage = new Uint8Array(96); // 32 header + 64 image
+      // Correct magic bytes
+      validImage[0] = 0x3d;
+      validImage[1] = 0xb8;
+      validImage[2] = 0xf3;
+      validImage[3] = 0x96;
+      // Correct load address
+      validImage[4] = 0x00;
+      validImage[5] = 0x00;
+      validImage[6] = 0x00;
+      validImage[7] = 0x00;
+      // Header size
+      validImage[8] = 0x20; // 32 bytes
+      validImage[9] = 0x00;
+      // Protected TLV area size
+      validImage[10] = 0x00;
+      validImage[11] = 0x00;
+      // Image size
+      validImage[12] = 0x40; // 64 bytes
+      validImage[13] = 0x00;
+      validImage[14] = 0x00;
+      validImage[15] = 0x00;
+      // Flags
+      validImage[16] = 0x00;
+      validImage[17] = 0x00;
+      validImage[18] = 0x00;
+      validImage[19] = 0x00;
+      // Version: 1.2.300
+      validImage[20] = 0x01; // Major
+      validImage[21] = 0x02; // Minor
+      validImage[22] = 0x2c; // Revision low byte (300 = 0x012c)
+      validImage[23] = 0x01; // Revision high byte
+
+      const info = await manager.imageInfo(validImage.buffer);
+      expect(info.version).toBe('1.2.300');
+      expect(info.imageSize).toBe(64);
+      expect(info.hash).toBeDefined();
+      expect(typeof info.hash).toBe('string');
     });
   });
 
