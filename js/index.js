@@ -29,7 +29,6 @@ const uploadDropZone = document.getElementById('upload-drop-zone');
 const uploadIcon = document.getElementById('upload-icon');
 const uploadDropTitle = document.getElementById('upload-drop-title');
 const uploadDropSubtitle = document.getElementById('upload-drop-subtitle');
-const fileUploaded = false;
 
 if (navigator && navigator.bluetooth && navigator.bluetooth.getAvailability()) {
     bluetoothIsAvailableMessage.innerText = 'Bluetooth is available in your browser.';
@@ -216,7 +215,7 @@ mcumgr.onConnect(() => {
     imageList.innerHTML = '';
 
     // Reset upload form state (device may have been reset/updated)
-    // if (!fileUploaded) resetUploadState();
+    // resetUploadState();
 
     mcumgr.cmdImageState();
 });
@@ -348,6 +347,8 @@ mcumgr.onMessage(({ op, group, id, data, length }) => {
                     console.log('[DEBUG] Setting button states...');
                     testButton.disabled = !(data.images && data.images.length > 1 && data.images[1] && data.images[1].pending === false);
                     confirmButton.disabled = !(data.images && data.images.length > 0 && data.images[0] && data.images[0].confirmed === false);
+                    const slotOnePending = !!(data.images && data.images.length > 1 && data.images[1] && data.images[1].pending === true);
+                    resetButton.disabled = !slotOnePending;
                     console.log('[DEBUG] Button states set - test:', testButton.disabled, 'confirm:', confirmButton.disabled);
                     break;
             }
@@ -620,7 +621,6 @@ const attemptAutoLoadFirmwareFromUrlParam = async () => {
         }
         console.log("Created remote file object:", remoteFile);
         handleSelectedFile(remoteFile);
-        fileUploaded = true;
     } catch (error) {
         console.error('Failed to auto load firmware from firmwareUrl parameter:', error);
         resetUploadState();
