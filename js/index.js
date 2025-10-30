@@ -5,7 +5,6 @@ const screens = {
 };
 
 const deviceName = document.getElementById('device-name');
-const deviceNameInput = document.getElementById('device-name-input');
 const connectButton = document.getElementById('button-connect');
 const echoButton = document.getElementById('button-echo');
 const disconnectButton = document.getElementById('button-disconnect');
@@ -43,11 +42,6 @@ if (navigator && navigator.bluetooth && navigator.bluetooth.getAvailability()) {
 let file = null;
 let fileData = null;
 let images = [];
-
-deviceNameInput.value = localStorage.getItem('deviceName');
-deviceNameInput.addEventListener('change', () => {
-    localStorage.setItem('deviceName', deviceNameInput.value);
-});
 
 // Close connection error alert
 closeConnectionError.addEventListener('click', () => {
@@ -453,11 +447,7 @@ uploadDropZone.addEventListener('drop', (e) => {
 });
 
 connectButton.addEventListener('click', async () => {
-    let filters = null;
-    if (deviceNameInput.value) {
-        filters = [{ namePrefix: deviceNameInput.value }];
-    };
-    await mcumgr.connect(filters);
+    await mcumgr.connect([{ namePrefix: 'Fieldy' }]);
 });
 
 disconnectButton.addEventListener('click', async () => {
