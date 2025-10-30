@@ -109,7 +109,7 @@
     <!-- Connected Screen -->
     <div class="content" id="connected-screen" style="display: none;">
         <!-- Device Controls Card -->
-        <div class="card shadow-sm mb-4">
+        <div class="card shadow-sm mb-4" style="opacity: 0;">
             <div class="card-header bg-primary text-white">
                 <h5 class="mb-0"><i class="bi-tools me-2"></i>Device Controls</h5>
             </div>
@@ -117,9 +117,6 @@
                 <div class="d-flex gap-2 flex-wrap">
                     <button id="button-echo" type="submit" class="btn btn-outline-primary">
                         <i class="bi-soundwave me-2"></i>Echo
-                    </button>
-                    <button id="button-reset" type="submit" class="btn btn-outline-info">
-                        <i class="bi-arrow-clockwise me-2"></i>Reset
                     </button>
                     <button id="button-disconnect" type="submit" class="btn btn-outline-secondary ms-auto">
                         <i class="bi-x-square me-2"></i>Disconnect
@@ -139,14 +136,17 @@
             <div class="card-body">
                 <div id="image-list" class="mb-3"></div>
                 <div class="d-flex gap-2 flex-wrap">
-                    <button id="button-erase" type="submit" class="btn btn-warning">
-                        <i class="bi-eraser-fill me-2"></i>Erase Slot
+                    <button class="btn btn-primary btn-lg" id="file-upload" disabled>
+                        <i class="bi-upload me-2"></i>1. Upload Firmware
                     </button>
                     <button id="button-test" type="submit" class="btn btn-primary" disabled>
-                        <i class="bi-play-circle me-2"></i>Test Slot #1 on Reboot
+                        <i class="bi-play-circle me-2"></i>2. Install on Reset
+                    </button>
+                    <button id="button-reset" type="submit" class="btn btn-outline-info">
+                        <i class="bi-arrow-clockwise me-2"></i>3. Reset & Install
                     </button>
                     <button id="button-confirm" type="submit" class="btn btn-success" disabled>
-                        <i class="bi-check-circle me-2"></i>Make Slot #0 Permanent
+                        <i class="bi-check-circle me-2"></i>4. Confirm Installation
                     </button>
                 </div>
             </div>
@@ -171,11 +171,11 @@
                     </div>
                 </div>
                 <div class="d-flex gap-2 mt-2">
-                    <button class="btn btn-primary btn-lg" id="file-upload" disabled>
-                        <i class="bi-upload me-2"></i>Upload Firmware
-                    </button>
                     <button class="btn btn-outline-secondary btn-lg" id="file-cancel" style="display: none;">
                         <i class="bi-x-lg me-2"></i>Cancel
+                    </button>
+                    <button id="button-erase" style="opacity: 0;" type="submit" class="btn btn-warning">
+                        <i class="bi-eraser-fill me-2"></i>Erase Slot
                     </button>
                 </div>
             </div>
