@@ -58,6 +58,8 @@ class MCUManager {
         this._seq = 0;
         this._userRequestedDisconnect = false;
         this._reconnectDelay = di.reconnectDelay || 1000;
+        this._reconnectTimeout = di.reconnectTimeout || 0; // 0 = single attempt (original behavior)
+        this._reconnectInterval = di.reconnectInterval || 2000;
     }
     async _requestDevice(filters) {
         const params = {
@@ -91,24 +93,40 @@ class MCUManager {
         }
     }
     _connect(delay = 1000) {
+        const isInitialConnect = delay === 0;
         setTimeout(async () => {
-            try {
-                if (this._connectingCallback) this._connectingCallback();
-                const server = await this._device.gatt.connect();
-                this._logger.info(`Server connected.`);
-                this._service = await server.getPrimaryService(this.SERVICE_UUID);
-                this._logger.info(`Service connected.`);
-                this._characteristic = await this._service.getCharacteristic(this.CHARACTERISTIC_UUID);
-                this._characteristic.addEventListener('characteristicvaluechanged', this._notification.bind(this));
-                await this._characteristic.startNotifications();
-                await this._connected();
-                if (this._uploadIsInProgress) {
-                    this._uploadNext();
+            const deadline = this._reconnectTimeout > 0 && !isInitialConnect
+                ? Date.now() + this._reconnectTimeout
+                : 0;
+
+            while (true) {
+                try {
+                    if (this._connectingCallback) this._connectingCallback();
+                    const server = await this._device.gatt.connect();
+                    this._logger.info(`Server connected.`);
+                    this._service = await server.getPrimaryService(this.SERVICE_UUID);
+                    this._logger.info(`Service connected.`);
+                    this._characteristic = await this._service.getCharacteristic(this.CHARACTERISTIC_UUID);
+                    this._characteristic.addEventListener('characteristicvaluechanged', this._notification.bind(this));
+                    await this._characteristic.startNotifications();
+                    await this._connected();
+                    if (this._uploadIsInProgress) {
+                        this._uploadNext();
+                    }
+                    return; // success
+                } catch (error) {
+                    this._logger.error(error);
+
+                    if (deadline && Date.now() < deadline && this._device) {
+                        this._logger.info(`Reconnect failed, retrying in ${this._reconnectInterval}ms...`);
+                        await new Promise(r => setTimeout(r, this._reconnectInterval));
+                        continue;
+                    }
+
+                    // Give up: initial connect shows error, reconnect shows null
+                    await this._disconnected(isInitialConnect ? error : null);
+                    return;
                 }
-            } catch (error) {
-                this._logger.error(error);
-                // Only show error to user on initial connection attempt, not on reconnection attempts
-                await this._disconnected(delay === 0 ? error : null);
             }
         }, delay);
     }

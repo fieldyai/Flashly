@@ -36,11 +36,13 @@ const autoSubtitle = document.getElementById('auto-subtitle');
 const autoHeaderIcon = document.getElementById('auto-header-icon');
 
 // State
-const mcumgr = new MCUManager();
+const mcumgr = new MCUManager({
+    reconnectTimeout: 60000,  // retry reconnect for 60s after disconnect
+    reconnectInterval: 2000,  // try every 2s
+});
 let firmwareData = null;
 let images = [];
 let state = 'init'; // init, downloading, ready, connecting, uploading, upload_done, testing, resetting, confirming, done, error
-let reconnecting = false;
 
 // --- UI helpers ---
 
@@ -189,7 +191,6 @@ const testImage = () => {
 const resetDevice = () => {
     state = 'resetting';
     showStatus('Restarting device...');
-    reconnecting = true;
     mcumgr.cmdReset();
 };
 
@@ -223,14 +224,18 @@ const finish = () => {
 
 mcumgr.onConnecting(() => {
     console.log('[AUTO] Connecting...');
+    if (state === 'resetting') {
+        showStatus('Device restarting... reconnecting...');
+    }
 });
 
 mcumgr.onConnect(() => {
     if (state === 'done') return;
-    console.log('[AUTO] Connected!');
+    console.log('[AUTO] Connected! state:', state);
 
-    if (reconnecting) {
-        reconnecting = false;
+    if (state === 'resetting' || state === 'needs_reconnect') {
+        // Reconnected after reset - proceed to confirm
+        autoActionWrap.style.display = 'none';
         showStatus('Reconnected! Verifying...');
         setTimeout(() => {
             state = 'confirming';
@@ -247,14 +252,18 @@ mcumgr.onConnect(() => {
 
 mcumgr.onDisconnect((error) => {
     if (state === 'done') return;
-    console.log('[AUTO] Disconnected', error);
+    console.log('[AUTO] Disconnected, state:', state, error);
 
-    if (state === 'resetting') {
-        showStatus('Device restarting... waiting for reconnection...');
+    if (state === 'resetting' || state === 'waiting_reconnect') {
+        // All retry attempts exhausted after reset. Show manual reconnect button.
+        showStatus('Could not reconnect automatically. Reconnect to finish the update.');
+        autoActionWrap.style.display = 'grid';
+        autoStartBtn.innerHTML = '<i class="bi-bluetooth me-2"></i>Reconnect';
+        state = 'needs_reconnect';
         return;
     }
 
-    if (state !== 'error' && state !== 'ready' && state !== 'init' && state !== 'downloading') {
+    if (state !== 'error' && state !== 'ready' && state !== 'init' && state !== 'downloading' && state !== 'needs_reconnect') {
         setStep('connect', 'error');
         showError(`Device disconnected unexpectedly: ${error?.message || 'Unknown reason'}`);
     }
@@ -314,12 +323,23 @@ mcumgr.onMessage(({ op, group, id, data }) => {
 autoStartBtn.addEventListener('click', async () => {
     if (state === 'ready') {
         await connectDevice();
+    } else if (state === 'needs_reconnect') {
+        // Reconnect after reset to confirm the update
+        autoActionWrap.style.display = 'none';
+        showStatus('Select your Fieldy device...');
+        try {
+            await mcumgr.connect([{ namePrefix: 'Fieldy' }]);
+            // onConnect callback will handle the confirm flow
+        } catch (err) {
+            showStatus('Device has restarted. Reconnect to finish the update.');
+            autoActionWrap.style.display = 'grid';
+            autoStartBtn.innerHTML = '<i class="bi-bluetooth me-2"></i>Reconnect';
+        }
     } else if (state === 'error') {
         autoHeaderIcon.classList.remove('bi-check-circle-fill', 'text-success');
         autoHeaderIcon.classList.add('bi-arrow-up-circle', 'text-primary');
         autoTitle.textContent = 'Firmware Update';
         autoSubtitle.textContent = 'Update your Fieldy device';
-        reconnecting = false;
         try { mcumgr.disconnect(); } catch (e) { /* ignore */ }
         await downloadFirmware();
     }
